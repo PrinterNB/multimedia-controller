@@ -12,24 +12,97 @@ DevKitC-1's **native USB-C port** as a HID consumer-control device. Flashing
 and serial logging stay on the second **UART-USB port** (CP210x), so a
 plugged-in HID device never blocks firmware updates.
 
-## Wiring (all inputs: GPIO → switch → GND, internal pull-ups)
+## Wiring diagram
 
-| Function          | GPIO   | Notes                                  |
-|-------------------|--------|----------------------------------------|
-| Encoder CH A      | GPIO4  | encoder pin 1 (A)                       |
-| Encoder CH B      | GPIO5  | encoder pin 2 (B)                       |
-| Encoder common    | GND    | encoder pin 3 (shared, to board GND)    |
-| Encoder push      | —      | middle contacts left unconnected         |
-| Play/Pause        | GPIO6  | Kailh Choc, other side to GND           |
-| Mute              | GPIO7  | Kailh Choc, other side to GND           |
-| Switch #3 (rsvd)  | GPIO1  | wired, no action yet                    |
-| Switch #4 (rsvd)  | GPIO2  | wired, no action yet                    |
-| Switch #5 (rsvd)  | GPIO15 | wired, no action yet                    |
+Every input is wired **GPIO → switch → GND**; the ESP32's internal pull-up
+does the rest (no external resistors needed). The board has only **four GND
+pins** (L22, R1, R21, R22) but there are six things to ground — so all
+ground-side terminals join one **GND bus** (a breadboard row or a solder
+blob), and that bus runs to the board with a single wire (W14).
 
-Nothing else is required — all the input GPIOs above support internal
-pull-ups, so no external resistors. The three reserved switches are polled
-and debounced in firmware today; assigning them a job later is a one-line
-change to the `g_btns[]` table in `src/main.cpp` (set their `Action`).
+### Board side — ESP32-S3 DevKitC-1 (USB-C port pointing up)
+
+Row numbers L1–L22 / R1–R22 count **from the top** of each header, matching
+the silkscreen labels printed next to each pin.
+
+```
+   row   LEFT header                    RIGHT header
+   ────   ──────────────────────         ──────────────────────
+    1     3V3                            GND     ◄── W14 (from GND bus)
+    2     3V3                            GPIO43
+    3     RST                            GPIO44
+    4     GPIO4  ◄── W1  (encoder A)     GPIO1   ◄── W8  (SW3)
+    5     GPIO5  ◄── W2  (encoder B)     GPIO2   ◄── W10 (SW4)
+    6     GPIO6  ◄── W4  (Play/Pause)    GPIO42
+    7     GPIO7  ◄── W6  (Mute)          GPIO41
+    8     GPIO15 ◄── W12 (SW5)           GPIO40
+    …    … (rows 9–20 not used)          … (rows 9–20 not used) …
+   21     5V0                            GND
+   22     GND                            GND
+```
+
+### Component side
+
+```
+   EC11 rotary encoder (5-pin)
+     pin 1 (A)      ── W1 ──►  left header, row 4  (GPIO4)
+     pin 2 (B)      ── W2 ──►  left header, row 5  (GPIO5)
+     pin 3 (COM)    ── W3 ──►  GND bus
+     pins 4, 5 (push switch)  ──►  LEAVE UNCONNECTED
+
+   Kailh Choc — PLAY/PAUSE  (2-pin, unmarked — either pin can be W4)
+     pin A ──► W4 ──►  left header, row 6  (GPIO6)
+     pin B ──► W5 ──►  GND bus
+
+   Kailh Choc — MUTE
+     pin A ──► W6 ──►  left header, row 7  (GPIO7)
+     pin B ──► W7 ──►  GND bus
+
+   SW3 (reserved)     SW4 (reserved)     SW5 (reserved)
+     pin A ──► W8  ──► right header, row 4  (GPIO1)
+     pin B ──► W9  ──► GND bus
+
+     pin A ──► W10 ──► right header, row 5  (GPIO2)
+     pin B ──► W11 ──► GND bus
+
+     pin A ──► W12 ──► left header, row 8   (GPIO15)
+     pin B ──► W13 ──► GND bus
+
+   GND bus   (W3, W5, W7, W9, W11, W13 all land here)
+     W14 ──► right header, row 1  (GND)
+```
+
+### Wire list
+
+| Wire | From (component pin)            | To (board pin)                          |
+|------|---------------------------------|-----------------------------------------|
+| W1   | EC11 pin 1 (A)                  | GPIO4 — left header, row 4              |
+| W2   | EC11 pin 2 (B)                  | GPIO5 — left header, row 5              |
+| W3   | EC11 pin 3 (COM)                | GND bus                                 |
+| W4   | Play/Pause Choc, either pin     | GPIO6 — left header, row 6              |
+| W5   | Play/Pause Choc, other pin      | GND bus                                 |
+| W6   | Mute Choc, either pin           | GPIO7 — left header, row 7              |
+| W7   | Mute Choc, other pin            | GND bus                                 |
+| W8   | SW3, either pin                 | GPIO1 — right header, row 4             |
+| W9   | SW3, other pin                  | GND bus                                 |
+| W10  | SW4, either pin                 | GPIO2 — right header, row 5             |
+| W11  | SW4, other pin                  | GND bus                                 |
+| W12  | SW5, either pin                 | GPIO15 — left header, row 8             |
+| W13  | SW5, other pin                  | GND bus                                 |
+| W14  | GND bus                         | GND — right header, row 1 (R21/R22/L22 identical) |
+
+**Pin ID tips**
+
+- **EC11**: the three encoder pins are the contiguous set (commonly 1-2-3);
+  the two push-switch pins (commonly 4-5) sit on the far end and stay
+  unconnected. If your part's markings differ, ID the common with a
+  multimeter: COM reads 0 Ω to A for half a turn, 0 Ω to B for the next half
+  turn; A↔B never connect directly.
+- **Kailh Choc**: both pins are identical (it's just a momentary switch), so
+  either one can carry the GPIO wire.
+- The three reserved switches are polled and debounced in firmware today;
+  assigning them a job later is a one-line change to the `g_btns[]` table in
+  `src/main.cpp` (set their `Action`).
 
 ## Build & flash
 
