@@ -44,11 +44,13 @@ the silkscreen labels printed next to each pin.
 ### Component side
 
 ```
-   EC11 rotary encoder (5-pin)
-     pin 1 (A)      ── W1 ──►  left header, row 4  (GPIO4)
-     pin 2 (B)      ── W2 ──►  left header, row 5  (GPIO5)
-     pin 3 (COM)    ── W3 ──►  GND bus
-     pins 4, 5 (push switch)  ──►  LEAVE UNCONNECTED
+   EC11 rotary encoder — the THREE-pin side only (the two-pin side is the
+   push switch: LEAVE IT COMPLETELY UNCONNECTED)
+     middle pin (COM)  ── W3 ──►  GND bus
+     left pin  (A)     ── W1 ──►  left header, row 4  (GPIO4)
+     right pin (B)     ── W2 ──►  left header, row 5  (GPIO5)
+     (A/B order doesn't matter — flipping it only reverses CW/CCW,
+      and ENC_DIR in the firmware can flip it too)
 
    Kailh Choc — PLAY/PAUSE  (2-pin, unmarked — either pin can be W4)
      pin A ──► W4 ──►  left header, row 6  (GPIO6)
@@ -76,9 +78,9 @@ the silkscreen labels printed next to each pin.
 
 | Wire | From (component pin)            | To (board pin)                          |
 |------|---------------------------------|-----------------------------------------|
-| W1   | EC11 pin 1 (A)                  | GPIO4 — left header, row 4              |
-| W2   | EC11 pin 2 (B)                  | GPIO5 — left header, row 5              |
-| W3   | EC11 pin 3 (COM)                | GND bus                                 |
+| W1   | EC11, 3-pin side, left pin      | GPIO4 — left header, row 4              |
+| W2   | EC11, 3-pin side, right pin     | GPIO5 — left header, row 5              |
+| W3   | EC11, 3-pin side, middle pin    | GND bus                                 |
 | W4   | Play/Pause Choc, either pin     | GPIO6 — left header, row 6              |
 | W5   | Play/Pause Choc, other pin      | GND bus                                 |
 | W6   | Mute Choc, either pin           | GPIO7 — left header, row 7              |
@@ -93,11 +95,12 @@ the silkscreen labels printed next to each pin.
 
 **Pin ID tips**
 
-- **EC11**: the three encoder pins are the contiguous set (commonly 1-2-3);
-  the two push-switch pins (commonly 4-5) sit on the far end and stay
-  unconnected. If your part's markings differ, ID the common with a
-  multimeter: COM reads 0 Ω to A for half a turn, 0 Ω to B for the next half
-  turn; A↔B never connect directly.
+- **EC11**: the side with **three** pins is the encoder — middle pin is the
+  common (COM → GND bus), the two outer pins are channels A/B (→ GPIO4/5,
+  order doesn't matter). The side with **two** pins is the push switch:
+  leave it unconnected. If in doubt, confirm COM with a multimeter: the
+  middle pin reads 0 Ω briefly to each outer pin in turn as you rotate, and
+  the two outer pins never read 0 Ω to each other.
 - **Kailh Choc**: both pins are identical (it's just a momentary switch), so
   either one can carry the GPIO wire.
 - The three reserved switches are polled and debounced in firmware today;
