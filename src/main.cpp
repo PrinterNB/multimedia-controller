@@ -10,19 +10,23 @@
  * Inputs (internal pull-ups, switches to GND):
  *   - EC11 rotary encoder (smooth mod, push contact unconnected):
  *       GPIO4 = CH A, GPIO5 = CH B — interrupt-driven 4x quadrature
- *   - 5 mechanical switches. Only Play/Pause and Mute have actions today;
- *     the other three are wired and debounced but emit nothing (reserved).
+ *   - 5 mechanical switches. Play/Pause, Mute and F13 (sw5) have actions;
+ *     the other two are wired and debounced but emit nothing (reserved).
  *
  * Key semantics:
  *   - Encoder CW/CCW  -> volume up/down (1 HID step per encoder count,
  *                        rate-limited while spinning)
  *   - Play/Pause, Mute -> consumer toggles, reported pressed for as long as
  *                        the physical button is held
+ *   - SW5 -> F13 (HID keyboard page 0x07 usage 0x68) via the framework's
+ *            USBHIDKeyboard; a host-side script (pc/media-launcher.ahk)
+ *            turns that into the real macro action
  */
 
 #include <Arduino.h>
 #include <USB.h>                    // core ESPUSB (native TinyUSB stack)
 #include <USBHIDConsumerControl.h>  // consumer control device
+#include <USBHIDKeyboard.h>         // keyboard device (for F13)
 
 // ========================= configuration =========================
 
@@ -36,12 +40,15 @@
 #define BTN_MUTE_PIN    7   // Kailh Choc: Mute
 #define BTN_SW3_PIN     1   // reserved (no action)
 #define BTN_SW4_PIN     2   // reserved (no action)
-#define BTN_SW5_PIN     15  // reserved (no action)
+#define BTN_SW5_PIN     15  // Kailh Choc: F13 (keyboard HID, see below)
 
-#define ENC_MIN_EDGE_US  300  // min gap between accepted encoder edges (us)
-#define ENC_DIR          1    // set to -1 to flip CW/CCW
-#define BTN_DEBOUNCE_MS  20   // two-sample debounce for switches
-#define VOL_STEP_MS      80   // gap between volume steps while spinning
+#define ENC_MIN_EDGE_US      300 // min gap between accepted encoder edges (us)
+#define ENC_DIR              1   // set to -1 to flip CW/CCW
+// 4x quadrature counting: one mechanical detent (one "click") produces four
+// valid A/B transitions. Divide by this to make 1 click == 1 volume notch.
+// If volume feels too fast/slow, change this (2 = coarser, per-half-click).
+#define ENC_COUNTS_PER_DETENT 4
+#define BTN_DEBOUNCE_MS  20     // two-sample debounce for switches
 
 // Consumer control usages (HID 1.12 usage page 0x0C, from the USB lib)
 #define CC_PLAY_PAUSE  CONSUMER_CONTROL_PLAY_PAUSE           // 0x00CD
@@ -50,11 +57,12 @@
 #define CC_VOL_DOWN    CONSUMER_CONTROL_VOLUME_DECREMENT     // 0x00EA
 
 USBHIDConsumerControl consumer;
+USBHIDKeyboard keyboard;  // shares the same USB HID interface; report id 1
 
 // ========================= buttons =========================
 
 // What pressing a switch does. kNone = wired + debounced, but no HID output.
-enum class Action { kNone, kPlayPause, kMute };
+enum class Action { kNone, kPlayPause, kMute, kF13 };
 
 struct Btn {
   const char* name;
@@ -72,13 +80,14 @@ static Btn g_btns[] = {
   Btn("mute",       BTN_MUTE_PIN, Action::kMute),
   Btn("sw3",        BTN_SW3_PIN,  Action::kNone),
   Btn("sw4",        BTN_SW4_PIN,  Action::kNone),
-  Btn("sw5",        BTN_SW5_PIN,  Action::kNone),
+  Btn("sw5",        BTN_SW5_PIN,  Action::kF13),
 };
 
 static void btnDown(Action a) {
   switch (a) {
     case Action::kPlayPause: consumer.press(CC_PLAY_PAUSE); break;
     case Action::kMute:      consumer.press(CC_MUTE);       break;
+    case Action::kF13:       keyboard.press(KEY_F13);       break;
     case Action::kNone: break;
   }
 }
@@ -87,6 +96,7 @@ static void btnUp(Action a) {
   switch (a) {
     case Action::kPlayPause:
     case Action::kMute: consumer.release(); break;
+    case Action::kF13:   keyboard.release(KEY_F13);         break;
     case Action::kNone: break;
   }
 }
@@ -119,6 +129,7 @@ static void onUsbEvent(void* arg, esp_event_base_t base, int32_t id, void* data)
       break;
     case ARDUINO_USB_RESUME_EVENT:
       consumer.release();
+      keyboard.release(KEY_F13);
       break;
     default:
       break;
@@ -170,30 +181,27 @@ static int32_t pollEncoder() {
 
 // ========================= volume stepping =========================
 //
-// Accumulates encoder counts and emits at most one volume step per
-// VOL_STEP_MS; the consumer usage is held for VOL_STEP_MS then released so
-// the OS registers discrete steps instead of one stuck key.
+// One mechanical detent (one "click") == one volume notch. The ISR lumps raw
+// 4x quadrature counts into g_encDelta; each tick we read the counts captured
+// since the last tick, turn whole detents into notches, and emit ONLY for
+// movement that happened this tick. We never keep a saved backlog, so the
+// volume stops changing the instant the wheel stops turning.
 
-static long g_volPending = 0;
-static uint16_t g_volActive = 0;
-static uint32_t g_volReleaseAt = 0;
-static uint32_t g_volNextStepAt = 0;
+static long g_encFrac = 0;    // sub-detent remainder of raw encoder counts
 
-static void volumeTick() {
-  uint32_t now = millis();
-  if (g_volActive) {
-    if (g_volPending == 0 || now >= g_volReleaseAt) {
-      consumer.release();
-      g_volActive = 0;
-      g_volNextStepAt = now + VOL_STEP_MS;
-    }
-    return;
-  }
-  if (g_volPending != 0 && now >= g_volNextStepAt) {
-    g_volActive = (g_volPending > 0) ? CC_VOL_UP : CC_VOL_DOWN;
-    g_volPending += (g_volPending > 0) ? -1 : 1;
-    consumer.press(g_volActive);
-    g_volReleaseAt = now + VOL_STEP_MS;
+static void handleEncoder() {
+  int32_t d = pollEncoder();  // raw counts this tick; 0 means the wheel is still
+  if (d == 0) return;         // -> do nothing (no drain, no auto-repeat)
+
+  g_encFrac += d;
+  long detents = g_encFrac / ENC_COUNTS_PER_DETENT;  // whole clicks
+  if (detents == 0) return;                          // <1 click: carry the remainder
+  g_encFrac -= detents * ENC_COUNTS_PER_DETENT;
+
+  uint16_t usage = (detents > 0) ? CC_VOL_UP : CC_VOL_DOWN;
+  for (long n = (detents > 0 ? detents : -detents); n > 0; n--) {
+    consumer.press(usage);   // one notch = one clean press + release
+    consumer.release();
   }
 }
 
@@ -213,16 +221,14 @@ void setup() {
   attachInterrupt(digitalPinToInterrupt(ENC_A_PIN), encoderISR, CHANGE);
   attachInterrupt(digitalPinToInterrupt(ENC_B_PIN), encoderISR, CHANGE);
 
-  // Native USB: consumer-control HID on GPIO19/20.
+  // Native USB: consumer-control + keyboard HID on GPIO19/20.
   USB.onEvent(onUsbEvent);
   consumer.begin();
+  keyboard.begin();
   USB.begin();
 }
 
 void loop() {
-  int32_t d = pollEncoder();
-  if (d != 0) g_volPending += d;
-
-  volumeTick();
+  handleEncoder();
   pollButtons();
 }
