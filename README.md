@@ -5,7 +5,12 @@ A custom USB-HID media controller for an ESP32-S3 DevKitC-1:
 - **EC11 rotary encoder** (smooth-mod, push contact not used) → volume up/down
 - **Kailh Choc switch #1** → Play/Pause
 - **Kailh Choc switch #2** → Mute
-- **Switches #3–#5** → wired and debounced, but no action yet (reserved)
+- **Switch #3–#4** → wired, reserved (no action by default)
+- **Switch #5** → F13 by default (launches an app via the AHK script)
+- All five switches are configurable from the device web UI
+
+The firmware includes a Wi-Fi setup and configuration UI. It stores settings
+in flash, so button and dial mappings survive reboot.
 
 Firmware is `src/main.cpp` (Arduino core). The device enumerates on the
 DevKitC-1's **native USB-C port** as a HID consumer-control device. Flashing
@@ -23,7 +28,8 @@ blob), and that bus runs to the board with a single wire (W14).
 ### Board side — ESP32-S3 DevKitC-1 (USB-C port pointing up)
 
 Row numbers L1–L22 / R1–R22 count **from the top** of each header, matching
-the silkscreen labels printed next to each pin.
+the silkscreen labels printed next to each pin. The full DevKitC-1 pinout is
+in `esp.txt`.
 
 ```
    row   LEFT header                    RIGHT header
@@ -115,6 +121,46 @@ the silkscreen labels printed next to each pin.
 3. `pio run` / click Build, then Upload.
 4. Open the monitor at 115200 on the UART port for boot logs.
 
+### First Wi-Fi setup
+
+After the first flash, the controller creates a temporary Wi-Fi network:
+
+1. Join `MediaCtrl-XXXX` with password `configureme`.
+2. Open `http://192.168.4.1` in a browser (default soft-AP address; the
+   firmware prints the actual IP over serial).
+3. Enter the 2.4 GHz Wi-Fi name, password, and a hostname such as
+  `desk-controller`.
+4. Select **Save all settings**. The setup network closes while the device
+  joins your Wi-Fi.
+
+On the local network, open `http://desk-controller.local` (or the IP shown in
+the UI). If the saved network cannot be reached for 12 seconds, the
+controller starts its setup network again so it remains discoverable and
+configurable.
+
+The AP password is currently `configureme`; change it in `src/main.cpp` if
+the controller will be used in an untrusted environment. The configuration
+page uses plain HTTP, so only configure Wi-Fi on a trusted local network.
+
+### Button and dial mappings
+
+Each button can send nothing, a media action (play/pause, mute, volume up,
+volume down, next, previous, stop, record, fast-forward, rewind, or eject),
+a keyboard key, a key plus modifiers, or a macro. Macro steps use
+`KEY:delay-ms` separated by commas; the delay is optional (default 40 ms,
+clamped to 0–2000 ms) and each `KEY` may itself be a modifier chord.
+Accepted modifiers: CTRL/CONTROL, SHIFT, ALT, GUI/WIN/CMD. For example:
+
+```text
+CTRL+SHIFT+S:0,A:80,ENTER:120
+```
+
+The dial supports volume, next track, previous track, scroll (sends UP/DOWN
+arrow keys), or any keyboard key. Its direction, steps per detent (1–10),
+acceleration, and minimum output interval (ms) are all configurable.
+This allows uses such as timeline scrubbing, zoom, brush size, or
+app-specific shortcut navigation in addition to volume.
+
 Plug the **native USB-C** port in afterwards (or before — order doesn't
 matter) and Windows/macOS should enumerate a consumer-control HID with no
 drivers.
@@ -124,16 +170,9 @@ drivers.
 
 ## PC-side macro launcher (staged, no trigger wired yet)
 
-`pc/media-launcher.ahk` (AutoHotkey **v2**) is ready to catch an **F13**
-keypress and launch the executable in `TargetExe`. No switch sends F13 today
-(all three reserved switches are `Action::kNone`), so the script does nothing
-until one of them is mapped. To wire up a macro later:
-
-1. Add a keyboard report: re-include `USBHIDKeyboard`, add a `USBHIDKeyboard
-   keyboard;` object, call `keyboard.begin()` in `setup()`, and send
-   `keyboard.press(KEY_F13)` / `keyboard.release(KEY_F13)` from the matching
-   reserved switch's `Action`.
-2. Edit `TargetExe` in the AHK script, run it, done.
+`pc/media-launcher.ahk` (AutoHotkey **v2**) can catch the keyboard **F13**
+action and launch the executable in `TargetExe`. Map any button to keyboard
+key `F13` in the web UI, edit `TargetExe`, and run the script.
 
 F13 is reserved for this device — don't remap it in other apps.
 
@@ -141,10 +180,10 @@ F13 is reserved for this device — don't remap it in other apps.
 
 | Input            | Sends                                        |
 |------------------|----------------------------------------------|
-| Encoder CW/CCW   | Consumer Vol Up (0x00E9) / Vol Down (0x00EA) — 1 step/count, rate-limited while spinning |
+| Encoder CW/CCW   | 4x quadrature, 1 detent = 1 step (`ENC_COUNTS_PER_DETENT`). Default: Consumer Vol Up/Down (0x00E9/0x00EA); web-UI configurable (volume, next, previous, scroll, or a keyboard key) with step multiplier, reverse, acceleration, and min output interval |
 | Play/Pause       | Consumer 0x00CD, held for as long as the button is held |
 | Mute             | Consumer 0x00E2, held for as long as the button is held |
-| Switches #3–#5   | (none — reserved)                            |
+| Switches #3–#5   | Configurable keyboard/media/macro actions      |
 
 ## Tunables (top of `src/main.cpp`)
 
@@ -152,8 +191,11 @@ F13 is reserved for this device — don't remap it in other apps.
 |-------------------|---------|------------------------------------------------|
 | `ENC_MIN_EDGE_US` | 300     | noise gate between encoder edges (µs)          |
 | `ENC_DIR`         | 1       | set `-1` to flip CW/CCW                        |
+| `ENC_COUNTS_PER_DETENT` | 4 | raw 4x counts per mechanical detent      |
 | `BTN_DEBOUNCE_MS` | 20      | two-sample switch debounce                     |
-| `VOL_STEP_MS`     | 80      | gap between volume steps while spinning        |
+| `WIFI_CONNECT_MS` | 12000   | grace period (ms) before the setup AP starts   |
+| `AP_PASSWORD`     | `configureme` | setup AP password                        |
+| `MAX_ACTION_LEN`  | 220     | max saved length of a button value/macro string|
 
 ## Edge cases handled
 
