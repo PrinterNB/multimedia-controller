@@ -18,14 +18,12 @@ MinimizeIfRunning := false
 ~$F13:: {
     if WinExist("ahk_exe " TargetExe) {
         if MinimizeIfRunning {
-            WinRestore("ahk_exe " TargetExe)
-            WinActivate("ahk_exe " TargetExe)
             WinMinimize("ahk_exe " TargetExe)
+            WinActivate("ahk_exe " TargetExe)
         }
         ; else: do nothing — app is already open
         return
     }
-    Dir := RegExReplace(TargetExe, "\\[^\\]+$", "") ; run from the exe's folder
-    Run TargetExe, , Dir
+    Run TargetExe
     return
 }
