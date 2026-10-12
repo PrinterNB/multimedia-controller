@@ -10,6 +10,8 @@ A custom USB-HID media controller for an ESP32-S3 DevKitC-1:
 The firmware includes a Wi-Fi setup and configuration UI. It stores settings
 in flash, so button and dial mappings survive reboot.
 
+Case/casing design: https://cad.onshape.com/documents/3eb54faf65a0d84d5a7cbb18/w/468cc3bd5017a4ae248292f9/e/e066f53f00f42a39a4706552?renderMode=0&uiState=6acd38ad51f57ab03b30b96e
+
 Firmware is `src/main.cpp` (Arduino core). The device enumerates on the
 DevKitC-1's **native USB-C port** as a HID consumer-control device. Flashing
 and serial logging stay on the second **UART-USB port** (CP210x), so a
